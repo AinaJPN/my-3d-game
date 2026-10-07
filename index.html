@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>そらつみ - 癒しのタワー</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;font-family:"Hiragino Maru Gothic ProN","Rounded Mplus 1c",sans-serif;background:#cfe6f5;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{display:block}
+#hud{position:fixed;top:18px;left:0;right:0;text-align:center;color:#fff;text-shadow:0 2px 10px rgba(80,110,160,.45);pointer-events:none}
+#score{font-size:56px;font-weight:bold}
+#best{font-size:14px;opacity:.9}
+#stage{font-size:14px;opacity:.9;margin-top:4px}
+#msg{position:fixed;top:32%;left:0;right:0;text-align:center;font-size:30px;color:#fff;text-shadow:0 2px 12px rgba(255,150,200,.8);opacity:0;transition:opacity .3s,transform .3s;pointer-events:none}
+.panel{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(220,235,255,.3);backdrop-filter:blur(4px)}
+.card{background:rgba(255,255,255,.9);border-radius:28px;padding:28px 26px;max-width:360px;width:88%;text-align:center;color:#5a6a8a;box-shadow:0 10px 40px rgba(100,130,180,.3)}
+.card h1{font-size:32px;color:#7a8ccf;margin-bottom:8px}
+.card h2{font-size:20px;color:#e58fb0;margin-bottom:6px}
+.card p{font-size:15px;line-height:1.7;margin:8px 0}
+button{margin-top:12px;border:none;border-radius:999px;padding:14px 34px;font-size:18px;font-family:inherit;color:#fff;background:linear-gradient(135deg,#a8b8f0,#f0a8c8);cursor:pointer;box-shadow:0 4px 14px rgba(200,150,200,.4)}
+button:active{transform:scale(.96)}
+#breath{width:110px;height:110px;margin:14px auto;border-radius:50%;background:radial-gradient(circle,#ffe0ef,#c9d6ff);display:flex;align-items:center;justify-content:center;font-size:34px;color:#7a8ccf;font-weight:bold;transition:transform 1s ease-in-out}
+#careTitle{font-size:22px;color:#6f86d6;margin:6px 0}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="hud"><div id="score">0</div><div id="best">BEST 0</div><div id="stage">☀️ ひるの空</div></div>
+<div id="msg">Perfect!</div>
+<div id="start" class="panel"><div class="card">
+<h1>☁️ そらつみ ☁️</h1>
+<p>ゆらゆら動くブロックを<br><b>タップ / クリック / スペース</b>で落として<br>空まで積み上げよう。</p>
+<p style="font-size:13px">ぴったり重ねると Perfect！<br>高く積むと、夕焼け → 夜 → 星空へ。<br>積むたびにオルゴールのメロディが育つよ🎵</p>
+<button id="startBtn">はじめる</button>
+</div></div>
+<div id="over" class="panel hidden"><div class="card">
+<h2>おつかれさま 🌸</h2>
+<p id="result"></p>
+<p style="font-size:13px">10秒だけ、ひとやすみしよう</p>
+<div id="careTitle"></div>
+<div id="breath">10</div>
+<p id="careText"></p>
+<button id="retryBtn">もういちど積む</button>
+</div></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const $ = id => document.getElementById(id);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#cfe6f5');
+scene.fog = new THREE.Fog('#cfe6f5', 25, 75);
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 300);
+
+const hemi = new THREE.HemisphereLight('#fff6fb','#b8c8ff',1.2);
+const sun = new THREE.DirectionalLight('#fff2e0',1.6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024,1024);
+Object.assign(sun.shadow.camera,{left:-10,right:10,top:10,bottom:-10,near:1,far:60});
+scene.add(hemi, sun, sun.target);
+
+const H = 1, BASE = 4, RANGE = 6;
+const boxGeo = new THREE.BoxGeometry(1,1,1);
+const sphereGeo = new THREE.SphereGeometry(1,16,12);
+
+const base = new THREE.Mesh(new THREE.CylinderGeometry(5,5.5,1.5,48), new THREE.MeshStandardMaterial({color:'#f6f0ff',roughness:.8}));
+base.position.y = -1.25; base.receiveShadow = true; scene.add(base);
+
+// 雲
+const cloudMat = new THREE.MeshStandardMaterial({color:'#fff',roughness:1,transparent:true,opacity:.92});
+const clouds = [];
+for(let i=0;i<18;i++){
+  const g = new THREE.Group();
+  for(let j=0;j<4;j++){
+    const s = new THREE.Mesh(sphereGeo,cloudMat);
+    s.position.set(j*1.2-1.8,Math.random()*.5,Math.random()*.6);
+    s.scale.setScalar(.9+Math.random()*.7);
+    g.add(s);
+  }
+  const a = Math.random()*Math.PI*2, r = 14+Math.random()*14;
+  g.position.set(Math.cos(a)*r, Math.random()*60-6, Math.sin(a)*r);
+  g.userData = {a,r,sp:.02+Math.random()*.03};
+  scene.add(g); clouds.push(g);
+}
+
+// 星空
+const starGeo = new THREE.BufferGeometry(), starN = 500, starArr = new Float32Array(starN*3);
+for(let i=0;i<starN;i++){
+  const th=Math.random()*Math.PI*2, ph=Math.random()*Math.PI*.48, r=110;
+  starArr[i*3]=Math.cos(th)*Math.sin(ph)*r; starArr[i*3+1]=Math.cos(ph)*r-15; starArr[i*3+2]=Math.sin(th)*Math.sin(ph)*r;
+}
+starGeo.setAttribute('position',new THREE.BufferAttribute(starArr,3));
+const starMat = new THREE.PointsMaterial({color:'#fffbe8',size:.7,transparent:true,opacity:0,fog:false,depthWrite:false});
+const stars = new THREE.Points(starGeo,starMat); scene.add(stars);
+
+// 月
+const moon = new THREE.Group();
+const moonMat = new THREE.MeshBasicMaterial({color:'#fff4cc',transparent:true,opacity:0,fog:false});
+const haloMat = new THREE.MeshBasicMaterial({color:'#fff4cc',transparent:true,opacity:0,fog:false,depthWrite:false});
+const moonM = new THREE.Mesh(sphereGeo,moonMat); moonM.scale.setScalar(4);
+const halo = new THREE.Mesh(sphereGeo,haloMat); halo.scale.setScalar(7);
+moon.add(halo,moonM); scene.add(moon);
+
+// 流れ星
+const shootMat = new THREE.MeshBasicMaterial({color:'#ffffff',transparent:true,opacity:0,fog:false,blending:THREE.AdditiveBlending,depthWrite:false});
+const shoot = new THREE.Mesh(boxGeo,shootMat); shoot.scale.set(.15,.15,9); scene.add(shoot);
+const shootVel = new THREE.Vector3(); let shootLife = 0;
+
+// パーティクル
+const SP = 120, spGeo = new THREE.BufferGeometry(), spPos = new Float32Array(SP*3);
+spGeo.setAttribute('position', new THREE.BufferAttribute(spPos,3));
+const spMat = new THREE.PointsMaterial({color:'#fff8c0',size:.25,transparent:true,opacity:0,depthWrite:false});
+scene.add(new THREE.Points(spGeo,spMat));
+const spVel = new Float32Array(SP*3);
+let spLife = 0;
+function sparkle(x,y,z){
+  for(let i=0;i<SP;i++){
+    spPos[i*3]=x; spPos[i*3+1]=y; spPos[i*3+2]=z;
+    const a=Math.random()*Math.PI*2, s=2+Math.random()*3;
+    spVel[i*3]=Math.cos(a)*s; spVel[i*3+1]=Math.random()*3; spVel[i*3+2]=Math.sin(a)*s;
+  }
+  spLife = 1;
+}
+
+// 小鳥・風船
+const birdCols = ['#ffd3e0','#cde8ff','#fff1b8','#d9f5d0'];
+const wingGeo = new THREE.BoxGeometry(.4,.03,.25); wingGeo.translate(.2,0,0);
+const beakGeo = new THREE.ConeGeometry(.06,.15,8); beakGeo.rotateX(Math.PI/2);
+const beakMat = new THREE.MeshStandardMaterial({color:'#ffb347'});
+const eyeMat = new THREE.MeshBasicMaterial({color:'#333'});
+const friends = [];
+function makeBird(i){
+  const g = new THREE.Group(), mat = new THREE.MeshStandardMaterial({color:birdCols[i],roughness:.6});
+  const body = new THREE.Mesh(sphereGeo,mat); body.scale.set(.26,.24,.34);
+  const head = new THREE.Mesh(sphereGeo,mat); head.scale.setScalar(.18); head.position.set(0,.18,.24);
+  const beak = new THREE.Mesh(beakGeo,beakMat); beak.position.set(0,.16,.45);
+  const e1 = new THREE.Mesh(sphereGeo,eyeMat); e1.scale.setScalar(.03); e1.position.set(.09,.22,.36);
+  const e2 = e1.clone(); e2.position.x=-.09;
+  const wl = new THREE.Mesh(wingGeo,mat), wr = new THREE.Mesh(wingGeo,mat);
+  wl.position.set(.15,.05,0); wr.position.set(-.15,.05,0); wr.rotation.y=Math.PI;
+  g.add(body,head,beak,e1,e2,wl,wr);
+  body.castShadow=true;
+  g.userData={type:'bird',wl,wr};
+  return g;
+}
+const balCols = ['#ffb3c7','#b3d4ff','#e0c3ff'];
+function makeBalloon(i){
+  const g = new THREE.Group();
+  const b = new THREE.Mesh(sphereGeo,new THREE.MeshStandardMaterial({color:balCols[i],roughness:.3,metalness:.1}));
+  b.scale.set(.5,.62,.5); b.castShadow=true; g.add(b);
+  const lg = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3()]);
+  const line = new THREE.Line(lg,new THREE.LineBasicMaterial({color:'#ffffff'}));
+  scene.add(line);
+  g.userData={type:'balloon',line};
+  return g;
+}
+for(let i=0;i<4;i++) friends.push(makeBird(i));
+for(let i=0;i<3;i++) friends.push(makeBalloon(i));
+for(const f of friends){ f.visible=false; f.userData.active=false; if(f.userData.line) f.userData.line.visible=false; scene.add(f); }
+function resetFriends(){ for(const f of friends){ f.visible=false; f.userData.active=false; if(f.userData.line) f.userData.line.visible=false; } }
+function spawnFriend(){
+  const free = friends.filter(f=>!f.userData.active);
+  if(!free.length) return;
+  const f = free[Math.floor(Math.random()*free.length)], a=Math.random()*Math.PI*2;
+  const u = f.userData;
+  u.active=true; f.visible=true; if(u.line) u.line.visible=true;
+  u.ox=(Math.random()-.5)*.8; u.oz=(Math.random()-.5)*.8; u.ph=Math.random()*6;
+  f.position.set(Math.cos(a)*22, camY+(u.type==='bird'?6:-8), Math.sin(a)*22);
+  if(u.type==='bird') tone(1568,.25,'sine',.05), setTimeout(()=>tone(1760,.25,'sine',.05),120);
+}
+
+// 音
+let actx;
+function tone(freq,dur=1.2,type='sine',vol=.18){
+  if(!actx) return;
+  const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol,t+.01);
+  g.gain.exponentialRampToValueAtTime(.001,t+dur);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t+dur);
+}
+const musicBox = (f,v=.12) => { tone(f,1.8,'sine',v); tone(f*4,.5,'sine',v*.25); };
+const semi = n => 523.25*Math.pow(2,n/12);
+const melody = [0,4,7,12,9,7,4,7, 5,9,12,9,7,4,2,4, 0,4,7,12,14,12,9,7, 5,4,2,4,0,-5,0,0];
+const bassLine = [-12,-12,-7,-7,-15,-15,-10,-12];
+let song = [], beatT = 0, beatI = 0;
+
+const colorFor = i => new THREE.Color().setHSL((0.6+i*0.035)%1,.55,.78);
+function makeBlock(w,d,i){
+  const m = new THREE.Mesh(boxGeo,new THREE.MeshStandardMaterial({color:colorFor(i),roughness:.5}));
+  m.scale.set(w,H,d); m.castShadow = m.receiveShadow = true;
+  scene.add(m); return m;
+}
+
+let stack=[], debris=[], cur=null, state='title', score=0, best=0, combo=0, camY=4, t=0, speed=1.6, friendT=3, skyLv=0, stageIdx=0;
+
+function clearAll(){
+  for(const b of stack) { scene.remove(b.mesh); b.mesh.material.dispose(); }
+  for(const d of debris){ scene.remove(d.mesh); d.mesh.material.dispose(); }
+  if(cur){ scene.remove(cur.mesh); cur.mesh.material.dispose(); }
+  stack=[]; debris=[]; cur=null;
+}
+function startGame(){
+  clearAll(); resetFriends();
+  score=0; combo=0; speed=1.6; song=[]; beatI=0; friendT=3; stageIdx=0;
+  $('score').textContent=0; $('stage').textContent=stages[0].name;
+  const m = makeBlock(BASE,BASE,0); m.position.set(0,0,0);
+  stack.push({mesh:m,w:BASE,d:BASE,x:0,z:0});
+  spawn(); state='play';
+}
+function spawn(){
+  const top = stack[stack.length-1], i = stack.length;
+  const axis = i%2 ? 'x':'z';
+  const m = makeBlock(top.w,top.d,i);
+  cur = {mesh:m,w:top.w,d:top.d,x:top.x,z:top.z,axis,t:-Math.PI/2,y:i*H+4,vy:0,falling:false};
+  m.position.set(cur.x,cur.y,cur.z);
+}
+function addDebris(w,d,x,y,z,mat,vx,vz){
+  const m = new THREE.Mesh(boxGeo,mat); m.scale.set(w,H,d); m.position.set(x,y,z); m.castShadow=true;
+  scene.add(m);
+  debris.push({mesh:m,vy:0,vx,vz,rx:(Math.random()-.5)*3,rz:(Math.random()-.5)*3});
+}
+function drop(){ if(state==='play' && cur && !cur.falling) { cur.falling=true; cur.vy=0; } }
+
+function land(){
+  const top = stack[stack.length-1], ax = cur.axis, sizeKey = ax==='x'?'w':'d';
+  const delta = cur[ax]-top[ax], size = cur[sizeKey], overlap = size-Math.abs(delta);
+  const y = stack.length*H;
+  if(overlap<=0){
+    scene.remove(cur.mesh);
+    addDebris(cur.w,cur.d,cur.x,y,cur.z,cur.mesh.material,ax==='x'?Math.sign(delta)*2:0,ax==='z'?Math.sign(delta)*2:0);
+    cur=null; state='falling';
+    tone(196,1.5,'triangle',.15); setTimeout(()=>tone(147,2,'triangle',.12),250);
+    setTimeout(gameOver,1200); return;
+  }
+  const n = melody[song.length%melody.length]; song.push(n);
+  if(Math.abs(delta)<0.15){
+    cur[ax]=top[ax]; combo++;
+    musicBox(semi(n),.16); musicBox(semi(n+7),.06);
+    sparkle(cur.x,y+.5,cur.z); showMsg(combo>1?`Perfect ×${combo}`:'Perfect!');
+    if(combo>=3){ cur[sizeKey]=Math.min(BASE,cur[sizeKey]+.25); }
+  } else {
+    combo=0;
+    const nc = top[ax]+delta/2, s = Math.sign(delta);
+    const dc = nc+s*(overlap/2+Math.abs(delta)/2);
+    cur[sizeKey]=overlap; cur[ax]=nc;
+    const dm = cur.mesh.material.clone();
+    if(ax==='x') addDebris(Math.abs(delta),cur.d,dc,y,cur.z,dm,s*1.5,0);
+    else addDebris(cur.w,Math.abs(delta),cur.x,y,dc,dm,0,s*1.5);
+    musicBox(semi(n),.14);
+  }
+  cur.mesh.scale.set(cur.w,H,cur.d); cur.mesh.position.set(cur.x,y,cur.z);
+  stack.push({mesh:cur.mesh,w:cur.w,d:cur.d,x:cur.x,z:cur.z});
+  score++; $('score').textContent=score;
+  if(song.length===melody.length) setTimeout(()=>showMsg('🎵 メロディ完成！'),500);
+  for(let i=stages.length-1;i>0;i--) if(score>=stages[i].h && stageIdx<i){
+    stageIdx=i; $('stage').textContent=stages[i].name; setTimeout(()=>showMsg(stages[i].msg),600); break;
+  }
+  speed = Math.min(3.6,1.6+score*0.05);
+  spawn();
+}
+
+let msgTimer;
+function showMsg(s){
+  const m=$('msg'); m.textContent=s; m.style.opacity=1; m.style.transform='translateY(-10px)';
+  clearTimeout(msgTimer); msgTimer=setTimeout(()=>{m.style.opacity=0;m.style.transform='';},900);
+}
+
+// 空のステージ
+const stages = [
+  {h:0, sky:'#cfe6f5',sun:'#fff2e0',si:1.6,hi:1.2,cloud:'#ffffff',night:0,name:'☀️ ひるの空',msg:''},
+  {h:10,sky:'#f9c4a4',sun:'#ffaa70',si:1.5,hi:1.0,cloud:'#ffe2d2',night:0,name:'🌅 夕焼けの空',msg:'🌅 夕焼けの空へ'},
+  {h:20,sky:'#7d6cae',sun:'#d0a8ff',si:.9,hi:.8,cloud:'#d3c4ee',night:.55,name:'🌙 夜の空',msg:'🌙 夜の空へ'},
+  {h:30,sky:'#18214a',sun:'#b0c0ff',si:.7,hi:.6,cloud:'#7f88bb',night:1,name:'✨ 星の海',msg:'✨ 星の海へ'},
+];
+const cA=new THREE.Color(), cB=new THREE.Color();
+function applySky(lv){
+  let i=0; while(i<stages.length-2 && lv>=stages[i+1].h) i++;
+  const a=stages[i], b=stages[i+1], k=Math.min(1,Math.max(0,(lv-a.h)/(b.h-a.h)));
+  const L=(p,q)=>p+(q-p)*k;
+  scene.background.copy(cA.set(a.sky).lerp(cB.set(b.sky),k)); scene.fog.color.copy(scene.background);
+  sun.color.copy(cA.set(a.sun).lerp(cB.set(b.sun),k)); sun.intensity=L(a.si,b.si);
+  hemi.intensity=L(a.hi,b.hi);
+  cloudMat.color.copy(cA.set(a.cloud).lerp(cB.set(b.cloud),k));
+  return L(a.night,b.night);
+}
+
+const cares = [
+  ['🌬️ ふかい深呼吸','4秒吸って、6秒かけてゆっくり吐こう。'],
+  ['🙆 肩まわし','肩をゆっくり後ろに3回まわして、ストンと力を抜こう。'],
+  ['👀 遠くを見る','窓の外や部屋の一番遠いところを10秒ながめて、目を休めよう。'],
+  ['🤲 手のひらぎゅっ','両手を5秒ぎゅっと握って、パッとひらこう。じんわり温かいね。'],
+  ['😊 にっこり','口角を上げて10秒。形だけの笑顔でも気持ちがほぐれるよ。'],
+  ['💧 お水をひとくち','近くの飲み物をひとくち。からだに「ありがとう」を。'],
+  ['🧘 首ゆらし','首をゆっくり右、左に傾けて、気持ちいいところで止めよう。'],
+  ['💗 自分をほめる','「ここまでよくがんばったね」と心の中で自分に言ってみよう。'],
+  ['🌿 背のび','両手を組んで上にぐーっと伸びて、ふっと力を抜こう。'],
+];
+let careTimer;
+function gameOver(){
+  state='over';
+  best=Math.max(best,score); $('best').textContent='BEST '+best;
+  $('result').innerHTML=`<b style="font-size:26px;color:#7a8ccf">${score}</b> 段 積めたよ${score>=best&&score>0?' ✨ベスト更新！':''}`;
+  const c = cares[Math.floor(Math.random()*cares.length)];
+  $('careTitle').textContent=c[0]; $('careText').textContent=c[1];
+  $('over').classList.remove('hidden');
+  let n=10; const b=$('breath'); b.textContent=n; b.style.transform='scale(1)';
+  clearInterval(careTimer);
+  careTimer=setInterval(()=>{
+    n--; b.textContent = n>0?n:'🌸';
+    b.style.transform = `scale(${n%2?1:1.25})`;
+    if(n<=0){ clearInterval(careTimer); musicBox(semi(0),.1); musicBox(semi(4),.08); musicBox(semi(7),.08); }
+  },1000);
+}
+
+function initAudio(){ if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended') actx.resume(); }
+$('startBtn').onclick=()=>{ initAudio(); $('start').classList.add('hidden'); startGame(); musicBox(semi(7)); };
+$('retryBtn').onclick=()=>{ clearInterval(careTimer); $('over').classList.add('hidden'); startGame(); musicBox(semi(7)); };
+renderer.domElement.addEventListener('pointerdown',e=>{ e.preventDefault(); drop(); });
+addEventListener('keydown',e=>{
+  if(e.code==='Space'||e.code==='Enter'){
+    e.preventDefault();
+    if(state==='title') $('startBtn').click();
+    else if(state==='over') $('retryBtn').click();
+    else drop();
+  }
+});
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+
+const clock = new THREE.Clock(), tgt = new THREE.Vector3(), dir = new THREE.Vector3();
+function loop(){
+  requestAnimationFrame(loop);
+  const dt = Math.min(clock.getDelta(),.05); t+=dt;
+
+  if(cur){
+    if(!cur.falling){
+      cur.t += dt*speed;
+      cur[cur.axis] = stack[stack.length-1][cur.axis] + Math.sin(cur.t)*RANGE;
+      cur.y = stack.length*H+4+Math.sin(t*3)*.1;
+    } else {
+      cur.vy += 60*dt; cur.y -= cur.vy*dt;
+      if(cur.y <= stack.length*H){ cur.y=stack.length*H; land(); }
+    }
+    if(cur) cur.mesh.position.set(cur.x,cur.y,cur.z);
+  }
+
+  for(let i=debris.length-1;i>=0;i--){
+    const d=debris[i];
+    d.vy+=25*dt;
+    d.mesh.position.x+=d.vx*dt; d.mesh.position.z+=d.vz*dt; d.mesh.position.y-=d.vy*dt;
+    d.mesh.rotation.x+=d.rx*dt; d.mesh.rotation.z+=d.rz*dt;
+    if(d.mesh.position.y < camY-30){ scene.remove(d.mesh); d.mesh.material.dispose(); debris.splice(i,1); }
+  }
+
+  if(spLife>0){
+    spLife-=dt*.8; spMat.opacity=Math.max(0,spLife);
+    for(let i=0;i<SP;i++){
+      spVel[i*3+1]-=4*dt;
+      spPos[i*3]+=spVel[i*3]*dt; spPos[i*3+1]+=spVel[i*3+1]*dt; spPos[i*3+2]+=spVel[i*3+2]*dt;
+    }
+    spGeo.attributes.position.needsUpdate=true;
+  }
+
+  for(const c of clouds){
+    c.userData.a+=c.userData.sp*dt;
+    c.position.x=Math.cos(c.userData.a)*c.userData.r; c.position.z=Math.sin(c.userData.a)*c.userData.r;
+  }
+
+  // オルゴールの伴奏
+  if(state==='play' && song.length>=3 && actx){
+    beatT+=dt;
+    if(beatT>=.42){
+      beatT=0;
+      musicBox(semi(song[beatI%song.length]+12),.035);
+      if(song.length>=8 && beatI%4===0) tone(semi(bassLine[(beatI/4)%8]),1.6,'triangle',.05);
+      if(song.length>=16 && beatI%2===1) musicBox(semi(song[(beatI+3)%song.length]+19),.02);
+      beatI++;
+    }
+  }
+
+  // 空
+  skyLv += (stack.length-skyLv)*Math.min(1,dt*1.2);
+  const night = applySky(skyLv);
+  stars.position.y = camY;
+  starMat.opacity = night*(.8+Math.sin(t*2)*.15);
+  starMat.size = .6+Math.sin(t*3.3)*.12;
+  moon.position.set(-30, camY+14+night*8, -40);
+  moonMat.opacity = night; haloMat.opacity = night*.15;
+  if(night>.5 && shootLife<=0 && Math.random()<dt*.35){
+    shootLife=1;
+    shoot.position.set(-20+Math.random()*50, camY+25+Math.random()*10, -35-Math.random()*10);
+    shootVel.set(-30-Math.random()*10,-12,4);
+    shoot.lookAt(tgt.copy(shoot.position).add(shootVel));
+  }
+  if(shootLife>0){
+    shootLife-=dt*1.2; shoot.position.addScaledVector(shootVel,dt);
+    shootMat.opacity=Math.max(0,Math.sin(shootLife*Math.PI))*night;
+  } else shootMat.opacity=0;
+
+  // 小鳥・風船
+  if(state==='play'){ friendT-=dt; if(friendT<=0){ friendT=5+Math.random()*5; spawnFriend(); } }
+  const top = stack[stack.length-1];
+  const topY = (stack.length-1)*H+.5;
+  for(const f of friends){
+    const u=f.userData; if(!u.active || !top) continue;
+    if(u.type==='bird'){
+      tgt.set(top.x+u.ox*top.w, topY+.24, top.z+u.oz*top.d);
+      dir.subVectors(tgt,f.position); const dist=dir.length();
+      if(dist>.05){
+        f.position.addScaledVector(dir,Math.min(1,dt*7/Math.max(dist,.5)));
+        f.position.y += Math.min(dist,1)*Math.sin(t*8)*.03;
+        tgt.y=f.position.y; f.lookAt(tgt);
+      } else { f.rotation.y += Math.sin(t*.7+u.ph)*dt*.5; }
+      const flap = dist>.2 ? Math.sin(t*25)*.9 : (Math.sin(t*3+u.ph)>.95 ? .5 : 0);
+      u.wl.rotation.z = flap; u.wr.rotation.z = -flap;
+    } else {
+      tgt.set(top.x+u.ox*top.w*1.4, topY+2.6+Math.sin(t*1.5+u.ph)*.2, top.z+u.oz*top.d*1.4);
+      f.position.lerp(tgt,Math.min(1,dt*1.5));
+      f.rotation.z = Math.sin(t+u.ph)*.15;
+      const p = u.line.geometry.attributes.position;
+      p.setXYZ(0,f.position.x,f.position.y-.6,f.position.z);
+      p.setXYZ(1,top.x+u.ox*top.w*.9,topY,top.z+u.oz*top.d*.9);
+      p.needsUpdate=true;
+    }
+  }
+
+  const target = Math.max(4,stack.length*H+2);
+  camY += (target-camY)*Math.min(1,dt*2.5);
+  const ang = state==='title'||state==='over' ? t*.15 : Math.PI/4;
+  const dist = state==='over' ? 14+stack.length*.3 : 14;
+  camera.position.set(Math.cos(ang)*dist, camY+8, Math.sin(ang)*dist);
+  camera.lookAt(0,camY-1,0);
+  sun.position.set(8,camY+18,6); sun.target.position.set(0,camY,0);
+
+  renderer.render(scene,camera);
+}
+loop();
+</script>
+</body>
+</html>
